@@ -1,0 +1,54 @@
+AGFP BGFP and HEK. gpr35 isoforms cells
+
+lastet binary Salmon fra https://github.com/COMBINE-lab/salmon/releases
+salmon-1.10.0_linux_x86_64.tar.gz
+
+# Create  index
+wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/latest_release/gencode.v45.transcripts.fa.gz  #the genome file from Gencode
+wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/latest_release/GRCh38.primary_assembly.genome.fa.gz #the transcripts file from Gencode
+
+# prepare genome decoy file
+grep "^>" <(gunzip -c GRCh38.primary_assembly.genome.fa.gz) | cut -d " " -f 1 > decoys.txt
+sed -i.bak -e 's/>//g' decoys.txt
+
+#prepare combined transcriptome and genome
+cat gencode.v45.transcripts.fa.gz GRCh38.primary_assembly.genome.fa.gz > gentrome.fa.gz
+
+../salmon-latest_linux_x86_64/bin/salmon index \
+--transcripts gentrome.fa.gz \
+--decoys decoys.txt \
+--kmerLen 25 \ # below 31 for reads under 75 bp. kmerlength < readlength / 2.  
+--gencode \
+--threads 12 \
+--index salmon_index
+
+
+# QC reads
+for m in AGFP AGFP-Kyna BGFP BGFP-Kyna HEK HEK-Kyna; do 
+# check if sample is already run
+if [ -d bbduk/$m ]; then
+  echo "Skipping $m!"
+  continue
+fi
+mkdir bbduk/$m/;
+echo "Processing $m ..."
+
+/filepath/bbduk.sh -Xmx16g ref=filepath/adapters.fa ktrim=r k=23 mink=11 hdist=1 tbo tpe qtrim=r trimq=15 minlen=36 maq=15 forcetrimright=149 trimpolya=10 threads=12 in1=../00_bbmap/${m}_clean_R1.fq.gz in2=../00_bbmap/${m}_clean_R2.fq.gz out1=bbduk/$m/${m}_R1_clean.fastq.gz out2=bbduk/$m/${m}_R2_clean.fastq.gz 2> bbduk/$m/${m}_bbduk.log
+done
+
+
+# Transcript abundance
+for m in AGFP AGFP-Kyna BGFP BGFP-Kyna HEK HEK-Kyna; do 
+# check if sample is already run
+if [ -d salmon_output/$m ]; then
+  echo "Skipping $m!"
+  continue
+fi
+mkdir salmon_output/$m/;
+echo "Processing $m ..."
+
+NB_double check the filepath
+/media/kristiho/DIVERSE/Schneditz-RNA2-2024-03-18/Salmon/salmon-latest_linux_x86_64/bin/salmon quant --index /media/kristiho/DIVERSE/Schneditz-RNA2-2024-03-18/Salmon/index/salmon_index --libType A --geneMap /media/kristiho/DIVERSE/Schneditz-RNA2-2024-03-18/Salmon/gencode.v45.annotation.gtf --validateMappings --threads 12 -1 bbduk/$m/${m}_R1_clean.fastq.gz -2 bbduk/$m/${m}_R2_clean.fastq.gz --output salmon_output/$m
+done
+#deseq2 sier bruke --gcBias, men jeg testet med en av samples med mest gc bias og det forandret omtrent ingenting
+
