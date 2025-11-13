@@ -1,0 +1,54 @@
+
+Caco Cell lines (KO og WT) untreated and treated with gpr35 agonist.
+
+lastet binary Salmon fra https://github.com/COMBINE-lab/salmon/releases
+salmon-1.10.0_linux_x86_64.tar.gz
+
+# Create index
+wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_47/gencode.v47.transcripts.fa.gz  #the genome file from Gencode
+wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_47/GRCh38.primary_assembly.genome.fa.gz #the transcripts file from Gencode
+
+# prepare genome decoy file
+grep "^>" <(gunzip -c GRCh38.primary_assembly.genome.fa.gz) | cut -d " " -f 1 > decoys.txt
+sed -i.bak -e 's/>//g' decoys.txt
+
+#prepare combined transcriptome and genome
+cat gencode.v47.transcripts.fa.gz GRCh38.primary_assembly.genome.fa.gz > gentrome.fa.gz
+
+/filepath/salmon-latest_linux_x86_64/bin/salmon index \
+--transcripts gentrome.fa.gz \
+--decoys decoys.txt \
+--kmerLen 25 \ # should be less then 31 for reads under 75 bp. kmerlength < readlength / 2. 
+--gencode \
+--threads 12 \
+--index salmon_index
+
+
+# QC reads. samples were sequenced in two lanes L001 and L002
+for m in $(ls fastq/ | sed 's/_R[12]_001.*//' | sort -u); do  # navn ala 1-Schneditz-RNA2_S1_L001
+# check if sample is already run
+if [ -d bbduk/$m ]; then
+  echo "Skipping $m!"
+  continue
+fi
+mkdir bbduk/$m/;
+echo "Processing $m ..."
+
+/filepath/bbmap/bbduk.sh -Xmx16g ref=/filepath/bbmap/resources/adapters.fa ktrim=r k=23 mink=11 hdist=1 tbo tpe qtrim=r trimq=15 minlen=36 maq=15 forcetrimright=49 trimpolya=10 trimpolyg=10 trimpolyc=10 threads=12 in1=fastq/${m}_R1_001.fastq.gz in2=fastq/${m}_R2_001.fastq.gz out1=bbduk/$m/${m}_R1_clean.fastq.gz out2=bbduk/$m/${m}_R2_clean.fastq.gz 2> bbduk/$m/${m}_bbduk.log
+done
+
+
+# Transcript abundance, read in the two lanes per sample
+for m in $(ls bbduk/ | sed 's/_L00[12].*//' | sort -u); do  # navn ala 1-Schneditz-RNA2_S1
+ut=$(echo $m | sed 's/_S[[:digit:]]*$//') # #  utnavn ala 1-Schneditz-RNA2
+# check if sample is already run
+if [ -d salmon/$ut ]; then
+  echo "Skipping $m!"
+  continue
+fi
+mkdir salmon/$ut/;
+echo "Processing $m ..."
+
+/filepath/salmon-latest_linux_x86_64/bin/salmon quant --index /filepath/BACKUP/Salmon_index/gencode.v47/salmon_index --libType A --gcBias --threads 12 -1 bbduk/${m}_L001/${m}_L001_R1_clean.fastq.gz bbduk/${m}_L002/${m}_L002_R1_clean.fastq.gz -2 bbduk/${m}_L001/${m}_L001_R2_clean.fastq.gz bbduk/${m}_L002/${m}_L002_R2_clean.fastq.gz --output salmon/$ut
+done
+
