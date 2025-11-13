@@ -33,7 +33,7 @@ fi
 mkdir bbduk/$m/;
 echo "Processing $m ..."
 
-/filepath/bbduk.sh -Xmx16g ref=filepath/adapters.fa ktrim=r k=23 mink=11 hdist=1 tbo tpe qtrim=r trimq=15 minlen=36 maq=15 forcetrimright=149 trimpolya=10 threads=12 in1=../00_bbmap/${m}_clean_R1.fq.gz in2=../00_bbmap/${m}_clean_R2.fq.gz out1=bbduk/$m/${m}_R1_clean.fastq.gz out2=bbduk/$m/${m}_R2_clean.fastq.gz 2> bbduk/$m/${m}_bbduk.log
+/filepath/bbmap/bbduk.sh -Xmx16g ref=filepath/bbmap/resources/adapters.fa ktrim=r k=23 mink=11 hdist=1 tbo tpe qtrim=r trimq=15 minlen=36 maq=15 forcetrimright=149 trimpolya=10 threads=12 in1=../00_bbmap/${m}_clean_R1.fq.gz in2=../00_bbmap/${m}_clean_R2.fq.gz out1=bbduk/$m/${m}_R1_clean.fastq.gz out2=bbduk/$m/${m}_R2_clean.fastq.gz 2> bbduk/$m/${m}_bbduk.log
 done
 
 
@@ -47,8 +47,6 @@ fi
 mkdir salmon_output/$m/;
 echo "Processing $m ..."
 
-NB_double check the filepath
-/media/kristiho/DIVERSE/Schneditz-RNA2-2024-03-18/Salmon/salmon-latest_linux_x86_64/bin/salmon quant --index /media/kristiho/DIVERSE/Schneditz-RNA2-2024-03-18/Salmon/index/salmon_index --libType A --geneMap /media/kristiho/DIVERSE/Schneditz-RNA2-2024-03-18/Salmon/gencode.v45.annotation.gtf --validateMappings --threads 12 -1 bbduk/$m/${m}_R1_clean.fastq.gz -2 bbduk/$m/${m}_R2_clean.fastq.gz --output salmon_output/$m
-done
-#deseq2 sier bruke --gcBias, men jeg testet med en av samples med mest gc bias og det forandret omtrent ingenting
 
+/filepath/Salmon/salmon-latest_linux_x86_64/bin/salmon quant --index /filepath/Salmon/index/salmon_index --libType A --geneMap /filepath/Salmon/gencode.v45.annotation.gtf --validateMappings --threads 12 -1 bbduk/$m/${m}_R1_clean.fastq.gz -2 bbduk/$m/${m}_R2_clean.fastq.gz --output salmon_output/$m
+done
