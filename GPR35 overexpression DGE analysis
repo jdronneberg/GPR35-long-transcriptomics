@@ -1,0 +1,809 @@
+# Set seed
+set.seed(123456)
+
+#Load packages
+
+library(DESeq2)
+library(tidyverse)
+library(RColorBrewer)
+library(biomaRt)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(EnhancedVolcano)
+library(gtable)
+library(clusterProfiler)
+library(DOSE)
+library(enrichplot)
+library(pheatmap)
+library(tidyr)
+library(ggpubr)
+library(Cairo)
+library(ashr)
+library(enrichplot)
+library(org.Hs.eg.db)
+
+#Load file and metadata
+#Import count data
+raw_counts <- read_tsv(file = "./Data/countmatrix.tsv") #sep = "\t"
+
+# Create metadata
+metadata <- data.frame(Sample = c("AGFP", "AGFP-Kyna", "BGFP", "BGFP-Kyna", "HEK", "HEK-Kyna"),  Condition = c("AGFP", "AGFP", "BGFP", "BGFP", "Control", "Control"),
+Treatment = c("Control", "Kyna", "Control", "Kyna", "Control", "Kyna"))
+rownames(metadata) <- metadata$Sample
+
+#Convert counts to data frame and set rownames as gene id version (ensemble).
+raw_counts <- as.data.frame(raw_counts)
+rownames(raw_counts) <- raw_counts$Gene_ID_Version
+
+# Extract count data
+keep <- metadata$Sample
+
+#Subset countdata based on keep vector
+counts <- raw_counts[, colnames(raw_counts) %in% keep]
+
+# Ensure metadata rownames match column names in count data
+all(colnames(counts) == rownames(metadata))
+  #TRUE
+
+#Convert countsdata to matrix.
+count_matrix <- as.matrix(counts)
+
+all(colnames(count_matrix) == rownames(metadata))
+## TRUE
+
+
+# Create DESeqDataSet object
+dds <- DESeqDataSetFromMatrix(countData = count_matrix,
+                              colData = metadata,
+                              design = ~ Condition)
+# Returns warning. convert counts to integer and condition to factors
+
+count_matrix <- round(count_matrix) # Round to nearest integer.
+
+storage.mode(count_matrix) <- "integer"
+
+#Convert Condition column in metadata to factor.
+metadata$Condition <- factor(metadata$Condition, levels = c("AGFP", "BGFP", "Control"))
+
+# Create DESeqDataSet object
+dds <- DESeqDataSetFromMatrix(countData = count_matrix,
+                              colData = metadata,
+                              design = ~ Condition)
+##No warning
+
+#Remove genes with low counts
+dds <- dds[rowSums(counts(dds)) > 10, ]
+##20794 elements after.
+
+#estimateSizeFactor
+dds <- estimateSizeFactors(dds)
+
+#Check levels for Condition factor in DESeq design to know comparison.
+levels(dds$Condition)
+#"AGFP",  "BGFP", "Control"  -> compare genotype "AGFP" with "BGFP"/"HEK". AGFP is the reference.
+
+#Run DESeq analysis
+ddsres <- DESeq(dds)
+
+#Retrive results for comparison
+deseqres_AvsC <- results(ddsres, contrast = c("Condition", "AGFP", "Control")) # foldchange = AGFP/Control.
+deseqres_BvsC <- results(ddsres, contrast = c("Condition", "BGFP", "Control")) # foldchange = BGFP/Control
+deseqres_BvsA <- results(ddsres, contrast = c("Condition", "BGFP", "AGFP")) # foldchange = BGFP/AGFP
+
+# View sorted results
+deseqres_AvsC <- deseqres_AvsC[order(deseqres_AvsC$pvalue), ]
+head(deseqres_AvsC) #Condition AGFP vs Control
+
+deseqres_BvsC <- deseqres_BvsC[order(deseqres_BvsC$pvalue), ]
+head(deseqres_BvsC) #Condition BGFP vs Control
+
+deseqres_BvsA <- deseqres_BvsA[order(deseqres_BvsA$pvalue), ]
+head(deseqres_BvsA) #Condition BGFP vs AGFP
+
+# Summary of significant genes
+summary(deseqres_AvsC)
+summary(deseqres_BvsC)
+summary(deseqres_BvsA)
+
+
+plotMA(deseqres_AvsC, ylim = c(-13, 13), main = " DGE AvsControl Without LfcShrinkage")
+plotMA(deseqres_BvsC, ylim = c(-13, 13), main = " DGE BvsControl Without LfcShrinkage")
+plotMA(deseqres_BvsA, ylim = c(-13, 13), main = " DGE AvsB Without LfcShrinkage")
+
+# Apply log2 fold-change shrinkage
+deseqres_AvsC_ash <- lfcShrink(ddsres, contrast = c("Condition", "AGFP", "Control"), type = "ashr") 
+deseqres_BvsC_ash <- lfcShrink(ddsres, contrast = c("Condition", "BGFP", "Control"), type = "ashr")
+deseqres_BvsA_ash <- lfcShrink(ddsres, contrast = c("Condition", "BGFP", "AGFP"), type = "ashr")
+
+
+#MAplot of all different visualizations of DGE analysis.
+
+plotMA(deseqres_AvsC, ylim = c(-13, 13), main = " DGE AvsControl Without LfcShrinkage")
+plotMA(deseqres_BvsC, ylim = c(-13, 13), main = " DGE BvsControl Without LfcShrinkage")
+plotMA(deseqres_BvsA, ylim = c(-13, 13), main = " DGE BvsA Without LfcShrinkage")
+
+plotMA(deseqres_AvsC_ash, ylim = c(-10, 10), main = " DGE AvsControl With Ashr LfcShrinkage")
+plotMA(deseqres_BvsC_ash, ylim = c(-10, 10), main = " DGE BvsControl With Ashr LfcShrinkage")
+plotMA(deseqres_BvsA_ash, ylim = c(-10, 10), main = " DGE BvsA With Ashr LfcShrinkage")
+
+#Proceed with lfcshrink data
+
+#Plot counts: Compare counts for top differential expressed gene based on padj.
+
+geneA <- plotCounts(ddsres, gene=rownames(deseqres_AvsC_ash)[which.min(deseqres_AvsC_ash$padj)], intgroup ="Condition", returnData = TRUE)
+
+geneB <- plotCounts(ddsres, gene=rownames(deseqres_BvsC_ash)[which.min(deseqres_BvsC_ash$padj)], intgroup ="Condition", returnData = TRUE)
+
+geneAB <- plotCounts(ddsres, gene=rownames(deseqres_BvsA_ash)[which.min(deseqres_BvsA_ash$padj)], intgroup ="Condition", returnData = TRUE)
+
+ggplot(geneAB, aes(x=Condition, y=count, fill = Condition))+
+  geom_jitter(aes(color = Condition), width = 0.1)+
+  labs(title = rownames(deseqres_AvsC_ash)[which.min(deseqres_BvsA_ash$padj)],
+       x = "Condition",
+       y = "Count")
+
+##Add columns with gene symble and additional information to the DESeq results table.
+
+# Use Ensembl's Biomart database
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")  # Human dataset
+
+#View list of attributes
+listAttributes(ensembl)
+
+# Combine ash data into list for faster work
+
+ash_list <- list(
+  deseqres_AvsC_ash = deseqres_AvsC_ash,
+  deseqres_BvsA_ash = deseqres_BvsA_ash,
+  deseqres_BvsC_ash = deseqres_BvsC_ash
+)
+
+#Convert to df within list and extract ensembl id version to own column (from rownames).
+df_list <- lapply(ash_list, function(x) {
+  df <- as.data.frame(x)
+  df$gene_id <- sub("\\..*", "", rownames(df)) # remove version suffix
+  df
+})
+
+# Make function to check duplicates based on rownames - basis for gene id column
+check_duplicates <- function(df_list) {
+  lapply(df_list, function(df) {
+    #gene_id
+    gene_ids <- sub("\\..*", "", rownames(df))
+    # Count how many base IDs are duplicated
+    sum(duplicated(gene_ids))
+  })
+}
+
+# Check duplicates before filtering
+dup_before <- check_duplicates(df_list)
+## 0 duplicates in dup_before
+
+# Remove duplicates (if any) based on  max abs log2FC.
+df_filtered <- lapply(df_list, function(df) {
+  df %>%
+    mutate(gene_id = sub("\\..*", "", rownames(df))) %>%
+    group_by(gene_id) %>%
+    slice_max(order_by = abs(log2FoldChange), n = 1, with_ties = FALSE) %>%
+    ungroup()
+})
+
+# Check duplicates after filtering
+dup_after <- check_duplicates(df_filtered) # No duplicates.
+
+
+#Extract ensemble gene id from each df.
+all_ids <- unique(unlist(lapply(df_list, \(df) df$gene_id)))
+
+# Retrieve information for each gene (e.g., Ensembl gene ID, symbol, and gene biotype)
+gene_info <- getBM(
+  attributes = c("ensembl_gene_id", "external_gene_name", "gene_biotype"),
+  filters = "ensembl_gene_id", 
+  values = all_ids,  # Ensembl gene IDs from DESeq2 results
+  mart = ensembl)
+#external_gene_name = gene symbol.
+#gene_biotype = protein coding, not coding etc.
+
+  # Merge gene_info with dataframes.
+
+annotated_list <- lapply(df_list, function(df) {
+  df <- left_join(df, gene_info, by = c("gene_id" = "ensembl_gene_id"))
+  return(df)
+})
+
+#Rename
+names(annotated_list) <- gsub("_ash$", "_df", names(annotated_list)) #$ specifies end of string.
+
+#Save to environment
+list2env(annotated_list, .GlobalEnv)
+
+  #Vulcanoplot of protein coding DEG
+
+#Filter out protein coding genes
+AvsC_protein <- deseqres_AvsC_df %>% filter(gene_biotype == "protein_coding")
+BvsA_protein <- deseqres_BvsA_df %>% filter(gene_biotype == "protein_coding")
+BvsC_protein <- deseqres_BvsC_df %>% filter(gene_biotype == "protein_coding")
+
+## Select top 20 differentially expressed genes by padj
+top20_AvsC <- AvsC_protein[order(AvsC_protein$padj), ][1:20, ]
+top20_BvsA <- BvsA_protein[order(BvsA_protein$padj), ][1:20, ]
+top20_BvsC <- BvsC_protein[order(BvsC_protein$padj), ][1:20, ]
+
+EnhancedVolcano(AvsC_protein,
+    lab = AvsC_protein$external_gene_name,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    selectLab = top20_AvsC$external_gene_name,
+    title = 'AGFP vs Hek',
+    pCutoff = 0.01,
+    FCcutoff = 1,
+    pointSize = 2.5,
+    labSize = 4.0,
+    drawConnectors = TRUE,
+    max.overlaps = Inf
+    )
+
+EnhancedVolcano(BvsA_protein,
+    lab = BvsA_protein$external_gene_name,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    selectLab = top20_BvsA$external_gene_name,
+    title = 'BGFP vs AGFP',
+    pCutoff = 0.01,
+    FCcutoff = 1,
+    pointSize = 2.5,
+    labSize = 4.0,
+    drawConnectors = TRUE,
+    max.overlaps = Inf
+    )
+
+EnhancedVolcano(BvsC_protein,
+    lab = BvsC_protein$external_gene_name,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    selectLab = top20_BvsC$external_gene_name,
+    title = 'BGFP vs HEK',
+    pCutoff = 0.01,
+    FCcutoff = 1,
+    pointSize = 2.5,
+    labSize = 4.0,
+    drawConnectors = TRUE,
+    max.overlaps = Inf
+    )
+
+  # PCA plot
+
+# Perform PCA using top 1000 variable genes and get the data for ggplot2
+vsd <- vst(dds, blind = TRUE)
+plotPCA(vsd, intgroup = "Condition", ntop = 1000)
+pca_data <- plotPCA(vsd, intgroup = "Condition", ntop = 1000, returnData = TRUE)
+
+# Define group colors
+group_color <- c("AGFP" = "#00BA38",
+                 "BGFP" = "#F8766D",
+                 "Control" = "#619CFF")
+
+# Set fixed group factor level
+colData(dds)$Condition <- factor(colData(dds)$Condition, levels = c("AGFP", "BGFP", "Control"))
+
+ann_colors <- list(Condition = group_color)
+
+#Customize PCA plot in ggplot2
+ggplot(pca_data, aes(PC1, PC2, color = Condition, label = name)) + # aes specifies aesthetics
+  geom_point(size = 3) + # Add points
+  geom_text(vjust = -0.5, hjust = 0.5, size = 3) + # Add sample labels
+  labs(title = "PCA Plot cluster conditions",
+       x = paste0("PC1: ", round(attr(pca_data, "percentVar")[1] * 100, 1), "% variance"), # attr -> set attributes of object.
+       y = paste0("PC2: ", round(attr(pca_data, "percentVar")[2] * 100, 1), "% variance")) +
+  scale_color_manual(values = group_color) +
+  theme_minimal() +
+  theme(legend.position = "top") +
+  guides(color = guide_legend(override.aes = list(label = ""))) # Remove labels in the legend
+
+  #Visualize differential gene expression using clusterprofiler
+
+# Prep DESEQres for GSEA visualization
+
+#Remove NA and "" from external_gene_name columns
+clean_gene_name <- function(x) {
+  lapply(x, function(df) {
+    df[df$external_gene_name !="" & !is.na(df$external_gene_name), ]
+  })
+}
+
+clustpro_list <- clean_gene_name(annotated_list)
+
+## Check duplicates in external_gene_name column
+check_dup_genename <- function(x) {
+  lapply(x, function(df) {
+    #gene_id
+    gene_name <- df$external_gene_name
+    # Count how many base IDs are duplicated
+    sum(duplicated(gene_name))
+  })
+}
+
+# Check duplicates before filtering
+dup_before <- check_dup_genename(clustpro_list)
+dup_before
+# 59 duplicated gene names in all three dataframes in clustpro_list.
+
+# Remove duplicates (if any) based on  max abs log2FC.
+clustpro_list <- lapply(clustpro_list, function(df) {
+  df %>%
+    group_by(external_gene_name) %>%
+    slice_max(order_by = abs(log2FoldChange), n = 1, with_ties = FALSE) %>%
+    ungroup()
+})
+
+# Check duplicates after filtering
+dup_after <- check_dup_genename(clustpro_list)
+dup_after
+# 0 duplicates in external gene name column after filtering.
+
+
+clustpro_list <- lapply(clustpro_list, function(x) {
+  x[x$external_gene_name != "GPR35", ]
+})
+
+# Generate ranked vectors
+ranked_vector <- function(df) {
+  
+  # Ensure numeric conversion of log2FC and pvalue
+  log2fc <- as.numeric(df$log2FoldChange)
+  pval <- as.numeric(df$pvalue)
+  
+  # Calculate ranking based on sign(log2FoldChange) * (-log10(pvalue))
+  ranking <- sign(log2fc) * (-log10(pval))
+  
+  # Create a named vector with gene symbols as names
+  ranked_vector <- setNames(ranking, df$external_gene_name)
+  
+  return(ranked_vector)
+}
+
+# Apply function to each dataframe in the list
+rank_vector <- lapply(clustpro_list, ranked_vector)
+
+#Rename
+names(rank_vector) <- gsub("^deseqres_", "vector_", names(rank_vector)) 
+
+#Check min and max values in ranked_vectors
+
+check_min_max <- function(x) {
+  lapply(x, function(vec) {
+    return(c(min=min(vec, na.rm = TRUE), max=max(vec, na.rm = TRUE)))
+  })
+}
+
+check_min_max(rank_vector)
+
+#$vector_AvsC_df
+#      min       max 
+#-302.8479  108.2073 
+
+#$vector_BvsA_df
+#      min       max 
+#-127.9346  239.3241 
+
+#$vector_BvsC_df
+#     min      max 
+#    -Inf 123.6105 
+
+###All numeric except min value in BvsC_df.
+
+# Find 2nd smallest finite min
+find_finite_min <- function(x) {
+  lapply(x, function(vec) {
+    min(vec[is.finite(vec)])
+  })
+}
+
+finite_min <- find_finite_min(rank_vector)
+finite_min <- finite_min[[3]]*10
+
+vec <- rank_vector$vector_BvsC_df
+vec[!is.finite(vec)] <- finite_min
+
+sort(vec)[1:10]
+##PEG10 is a finite value 10x smaller than the second lowest value.
+
+# Assign back to the list
+rank_vector$vector_BvsC_df <- vec
+
+check_min_max(rank_vector)
+##  All nummeric
+
+##Generate ranking plots
+
+plot_rankings <- function(vec, name) {
+  plot(
+    sort(vec, decreasing = TRUE),
+    main = paste("Ranking plot", name),
+    xlab = "Genes",
+    ylab = "Ranking score"
+  )
+}
+
+# Generate ranking plot for each dataset
+for (name in names(rank_vector)) {
+  vec <- rank_vector[[name]]
+  plot_rankings(vec, name)
+}
+
+  # Perform GSEA
+
+# Load .gmt files into a named list
+gmt_files <- list(
+  GOBP = read.gmt("../GSEA_genesets/c5.go.bp.v2024.1.Hs.symbols.gmt"),
+  KEGG = read.gmt("../GSEA_genesets/c2.cp.kegg_legacy.v2024.1.Hs.symbols.gmt"),
+  Hallmark = read.gmt("../GSEA_genesets/h.all.v2024.1.Hs.symbols.gmt"),
+  Reactome = read.gmt("../GSEA_genesets/c2.cp.reactome.v2024.1.Hs.symbols.gmt")
+)
+
+# Function to run GSEA
+run_gsea_all <- function(ranked_list, gmt_list) {
+  results <- list()
+  
+  for (vec_name in names(ranked_list)) {
+    ranked_vec <- sort(ranked_list[[vec_name]], decreasing = TRUE)
+    
+    for (gmt_name in names(gmt_list)) {
+      geneset <- gmt_list[[gmt_name]]
+      
+      # Run GSEA
+      gsea_result <- tryCatch({
+        GSEA(
+          gene = ranked_vec,
+          TERM2GENE = geneset,
+          pAdjustMethod = "BH", # Adjust for multiple testing
+  pvalueCutoff = 0.05, # P-value cutoff for enrichment
+  minGSSize = 5,
+  maxGSSize = 1000,
+  eps = 0, #boundary for calculating pval
+  exponent = 1, #weight of each step
+  seed = TRUE
+        )
+      }, error = function(e) {
+        message(sprintf("Failed GSEA for %s - %s: %s", vec_name, gmt_name, e$message))
+        return(NULL)
+      })
+      
+      results[[paste0(vec_name, "_", gmt_name)]] <- gsea_result
+    }
+  }
+  
+  return(results)
+}
+
+library(BiocParallel)
+
+register(SerialParam()) #Ensures all computations are performed serially instead of in parallel -> windows can have problems with parallel computations.
+
+# Run GSEA
+gsea_result <- run_gsea_all(rank_vector, gmt_files)
+
+  # Filter gsea results to reduce similar pathways/redundancy.
+
+# Function to reduce redundancy in GSEA results
+filter_gsea_results <- function(gsea_list, max_terms = 15, method = "complete") {
+  reduced_list <- list()
+  
+  for (name in names(gsea_list)) {
+    gsea <- gsea_list[[name]]
+    
+    # Skip if GSEA failed
+    if (is.null(gsea) || nrow(gsea@result) == 0) {
+      message(sprintf("Skipping %s: no results", name))
+      reduced_list[[name]] <- NULL
+      next
+    }
+    
+  if (nrow(gsea@result) == 1) {
+      message(sprintf("Skipping clustering for %s: only one gene set", name))
+      reduced_list[[name]] <- gsea
+      next
+    }
+
+    # Compute term similarity matrix
+    gsea <- pairwise_termsim(gsea)
+    ## Stored in gsea@termsim
+    
+    # Use hierarchical clustering to group similar pathways
+    sim_matrix <- gsea@termsim
+    
+    # Hierarchical clustering on similarity
+    ## Distance matrix = 1 - sim_matrix
+    hc <- hclust(as.dist(1 - sim_matrix), method = method)
+    
+    # Cut into k clusters, where k is the smaller of the number of terms or max_terms
+    k <- min(max_terms, nrow(sim_matrix))
+    clusters <- cutree(hc, k = k)
+    
+    # Select one representative per cluster (lowest adjusted p-value)
+    gsea_df <- gsea@result # pull results from gsea object
+    gsea_df$Cluster <- clusters[match(gsea_df$ID, names(clusters))] # add column with clusters
+    
+    # For each cluster, keep the best term
+    representative_terms <- gsea_df %>%
+      group_by(Cluster) %>%
+      slice_min(p.adjust, n = 1) %>%
+      ungroup() %>%
+      arrange(p.adjust)
+    
+    # Subset the original GSEA object to keep only the selected terms
+    reduced_list[[name]] <- gsea[representative_terms$ID]
+  }
+  
+  return(reduced_list)
+}
+
+filtered_gsea_result <- filter_gsea_results(gsea_result, max_terms = 15)
+
+  # Visualize clustering used to reduce similarity
+
+# Function to plot the dendrogram of enriched terms, colored by clusters
+plot_term_clustering <- function(gsea, title = NULL, method = "complete", max_terms = 15) {
+  
+  # Compute pairwise term similarities using tryCatch to handle errors
+  gsea <- tryCatch(pairwise_termsim(gsea), error = function(e) {
+    message("pairwise_termsim failed: ", e$message)
+    return(NULL)
+  })
+  
+  # Skip if pairwise_termsim failed or result is not a valid gseaResult
+  if (is.null(gsea) || !inherits(gsea, "gseaResult")) {
+    cat("Skipping plot for", title, "- not a valid gseaResult after pairwise_termsim\n")
+    return()
+  }
+
+  # Extract similarity matrix
+  sim_matrix <- gsea@termsim
+  
+  # Perform hierarchical clustering based on similarity matrix
+  hc <- tryCatch(hclust(as.dist(1 - sim_matrix), method = method), error = function(e) {
+    message("Hierarchical clustering failed for ", title, ": ", e$message)
+    return(NULL)
+  })
+  
+  # Skip if hierarchical clustering fails
+  if (is.null(hc)) {
+    cat("Skipping plot for", title, "- clustering failed\n")
+    return()
+  }
+  
+  # Determine number of terms
+  num_terms <- length(hc$labels)
+  if (num_terms < 2) {
+    cat("Skipping plot for", title, "- fewer than 2 terms\n")
+    return()  # Skip plot if fewer than 2 terms
+  }
+  
+  # Set k to be within the range [2, term_count - 1], and not more than max_terms
+  k <- min(max_terms, num_terms - 1)
+  
+  # Skip plotting if there are not enough clusters or terms to create valid clusters
+  if (k < 2) {
+    cat("Skipping plot for", title, "- not enough clusters to plot\n")
+    return()
+  }
+  
+  # Plot the dendrogram and highlight clusters
+  plot(hc, main = title, xlab = "", sub = "")
+  rect.hclust(hc, k = k, border = 2:(k + 1))  # Highlight clusters with different borders
+}
+
+# Generate plots for each valid GSEA result
+for (name in names(gsea_result)) {
+  gsea <- gsea_result[[name]]
+  
+# Skip if not a gseaResult object
+  if (!inherits(gsea, "gseaResult")) {
+    cat("Skipping:", name, "(not a gseaResult)\n")
+    next
+  }
+
+  cat("Plotting:", name, "\n") # feedback wich plot is being made
+  plot_term_clustering(gsea, title = name, max_terms = 15)
+}
+
+
+  #Plot all dotplots into single pdf
+
+# Function to generate dot plots for all GSEA result dataframes
+
+generate_dotplots_combined <- function(filter_gsea) {
+  
+  for (name in names(filter_gsea)) {
+    res <- filter_gsea[[name]]
+    
+    # If it's a gseaResult, extract @result
+    if (inherits(res, "gseaResult")) {
+      res <- res@result
+    }
+    
+    # Check if the object is a dataframe and has required columns
+    if (!is.data.frame(res) || !all(c("NES", "Description", "core_enrichment", "p.adjust", "setSize") %in% colnames(res))) {
+      cat("Skipping:", name, "(not a valid dataframe or missing required columns)\n")
+      next
+    }
+    
+    # Remove "vector_" prefix from name
+    plot_title <- sub("^vector_", "", name)
+    
+    cat("Generating dot plot for:", plot_title, "\n")
+
+    # Calculate the Generatio
+    res$Generatio <- sapply(strsplit(res$core_enrichment, "/"), length) / res$setSize
+    
+    # Generate the dot plot
+    p <- ggplot(res, aes(x = NES, y = reorder(Description, NES))) +
+      geom_point(aes(size = Generatio, color = p.adjust), alpha = 0.6) +  # Dot size reflects gene ratio, color by p.adjust
+      scale_size_continuous(range = c(2, 8),  # Size of the dots
+                            labels = function(x) format(x, digits = 3)) +  # Ensure 3 significant digits
+      scale_color_gradientn(colors = c("red", "blue"),  # Color gradient by p.adjust
+                            labels = function(x) format(x, digits = 3)) +
+      scale_x_continuous(expand = expansion(mult = c(0.1, 0.1))) +
+      labs(x = "Normalized Enrichment Score (NES)", y = "Pathway",
+           title = plot_title) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.title = element_text(hjust = 0.5))  # Rotate x-axis labels
+    
+    # Print the plot
+    print(p)
+  }
+}
+
+# Call the function with your filtered GSEA results
+generate_dotplots_combined(filtered_gsea_result)
+
+
+  # Prep DESEQ results for enrichment analysis
+
+# Creat a list with up and downregulated genes
+enrichment_lists <- list()
+
+# Loop over dataframes in clustpro_list
+for(name in names(clustpro_list)) {
+  df <- clustpro_list[[name]]
+  
+  # Create universe for each dataframe
+  universe_genes <- df$external_gene_name
+  
+    # Extract upregulated genes (log2fc > 0)
+  up_genes <- df$external_gene_name[df$log2FoldChange >= 1]
+  
+  # Extract downregulated genes (log2fc < 0)
+  down_genes <- df$external_gene_name[df$log2FoldChange <= -1]
+
+  
+  # Store in list
+  enrichment_lists[[name]] <- list(
+    universe = universe_genes,
+    upregulated = up_genes,
+    downregulated = down_genes
+  )
+}
+
+
+  ## Perform enrichment analysis using enrichGO
+
+# List to store enrichment results
+enrich_results <- list()
+
+for(name in names(enrichment_lists)) {
+  universe <- enrichment_lists[[name]]$universe
+  up <- enrichment_lists[[name]]$upregulated
+  down <- enrichment_lists[[name]]$downregulated
+  
+  # Run enrichGO for upregulated genes
+  go_up <- enrichGO(
+    gene = up,
+    OrgDb = org.Hs.eg.db,
+    keyType = "SYMBOL",
+    ont = "BP",
+    pAdjustMethod = "BH",
+    pvalueCutoff = 0.05,
+    qvalueCutoff = 0.05,
+    readable = TRUE,
+    universe = universe,
+    minGSSize = 5,
+    maxGSSize = 1000
+  )
+  
+  # Run enrichGO for downregulated genes
+  go_down <- enrichGO(
+    gene = down,
+    OrgDb = org.Hs.eg.db,
+    keyType = "SYMBOL",
+    ont = "BP",
+    pAdjustMethod = "BH",
+    pvalueCutoff = 0.05,
+    qvalueCutoff = 0.05,
+    readable = TRUE,
+    universe = universe,
+    minGSSize = 5,
+    maxGSSize = 1000
+  )
+  
+  # Store results
+  enrich_results[[name]] <- list(
+    up_enrich = go_up,
+    down_enrich = go_down
+  )
+}
+
+
+
+  # Filter enrichment results
+
+# Apply simplify to all results
+
+enrich_results <- lapply(enrich_results, function(x) {
+  up <- simplify(x$up_enrich, cutoff = 0.5, by = "p.adjust", select_fun = min)
+  down <- simplify(x$down_enrich, cutoff = 0.5, by = "p.adjust", select_fun = min)
+  
+  list(
+    up_enrich = up,
+    down_enrich = down
+  )
+})
+
+
+  # Visualize enriched pathways
+
+enrich_dotplots_combined <- function(enrich_list, top_n = 20) {
+  
+  for (name in names(enrich_list)) {
+    res <- enrich_list[[name]]
+    
+    # Remove "deseqres_" prefix from name
+    plot_title <- sub("^deseqres_", "", name)
+    
+    cat("Generating dot plot for:", plot_title, "\n")
+    
+    # Function to prep data for plotting
+    prep_df <- function(x) {
+      df <- x@result %>%
+        as_tibble() %>%
+        arrange(p.adjust) %>%
+        head(top_n) %>%
+        mutate(
+          GeneRatio = sapply(strsplit(as.character(GeneRatio), "/"),
+                     function(x) (as.numeric(x[1]) / as.numeric(x[2])) #Calculate ratio
+                     )
+        )
+      return(df)
+    }
+ # Prep up and down data
+    df_up <- prep_df(res$up_enrich)
+    df_down <- prep_df(res$down_enrich)
+    
+    # Plot
+    make_plot <- function(df, label){
+      
+      ggplot(df, aes(x = GeneRatio, y = reorder(Description, GeneRatio))) +
+       geom_point(aes(size = Count, color = p.adjust), alpha = 0.6) +  # Dot size reflects gene ratio, color by p.adjust
+      scale_size_continuous(range = c(2, 8),  # Size of the dots
+                            labels = function(x) format(x, digits = 3)) +  # Ensure 3 significant digits
+      scale_color_gradientn(colors = c("red", "blue"),  # Color gradient by p.adjust
+                            labels = function(x) format(x, digits = 3)) +
+      scale_x_continuous(expand = expansion(mult = c(0.1, 0.1))) +
+      labs(x = "Gene Ratio", y = "Pathway",
+           title = paste(plot_title, "-", label)
+           )+
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.title = element_text(hjust = 0.5))  # Rotate x-axis labels
+        
+    }
+ 
+    # Plot and print
+    print(make_plot(df_up, "Upregulated"))
+    print(make_plot(df_down, "Downregulated"))
+  }
+
+}  
+
+# Call the function with your filtered GSEA results
+enrich_dotplots_combined(enrich_results)
