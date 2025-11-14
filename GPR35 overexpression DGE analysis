@@ -23,54 +23,30 @@ library(ashr)
 library(enrichplot)
 library(org.Hs.eg.db)
 
-#Load file and metadata
-#Import count data
-raw_counts <- read_tsv(file = "./Data/countmatrix.tsv") #sep = "\t"
+  # Load metadata and create count matrix
 
-# Create metadata
+# Create metadata, but without file paths.
 metadata <- data.frame(Sample = c("AGFP", "AGFP-Kyna", "BGFP", "BGFP-Kyna", "HEK", "HEK-Kyna"),  Condition = c("AGFP", "AGFP", "BGFP", "BGFP", "Control", "Control"),
 Treatment = c("Control", "Kyna", "Control", "Kyna", "Control", "Kyna"))
 rownames(metadata) <- metadata$Sample
 
-#Convert counts to data frame and set rownames as gene id version (ensemble).
-raw_counts <- as.data.frame(raw_counts)
-rownames(raw_counts) <- raw_counts$Gene_ID_Version
+metadata <- read_tsv("metadata.tsv")
 
-# Extract count data
-keep <- metadata$Sample
+se <- tximeta(metadata, type="salmon") # use ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_45/gencode.v45.annotation.gtf.gz
 
-#Subset countdata based on keep vector
-counts <- raw_counts[, colnames(raw_counts) %in% keep]
+colData(se)
+assayNames(se)
+rowRanges(se) # 252048 transcriptids
 
-# Ensure metadata rownames match column names in count data
-all(colnames(counts) == rownames(metadata))
-  #TRUE
-
-#Convert countsdata to matrix.
-count_matrix <- as.matrix(counts)
-
-all(colnames(count_matrix) == rownames(metadata))
-## TRUE
+# 
+gse <- summarizeToGene(se)
+rowRanges(gse) # 62749 geneids
 
 
 # Create DESeqDataSet object
 dds <- DESeqDataSetFromMatrix(countData = count_matrix,
                               colData = metadata,
                               design = ~ Condition)
-# Returns warning. convert counts to integer and condition to factors
-
-count_matrix <- round(count_matrix) # Round to nearest integer.
-
-storage.mode(count_matrix) <- "integer"
-
-#Convert Condition column in metadata to factor.
-metadata$Condition <- factor(metadata$Condition, levels = c("AGFP", "BGFP", "Control"))
-
-# Create DESeqDataSet object
-dds <- DESeqDataSetFromMatrix(countData = count_matrix,
-                              colData = metadata,
-                              design = ~ Condition)
-##No warning
 
 #Remove genes with low counts
 dds <- dds[rowSums(counts(dds)) > 10, ]
