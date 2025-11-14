@@ -1,0 +1,717 @@
+
+# Set seed
+set.seed(123456)
+
+#Load packages
+library(DESeq2)
+library(tidyverse)
+library(RColorBrewer)
+library(biomaRt)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(EnhancedVolcano)
+library(gtable)
+library(clusterProfiler)
+library(DOSE)
+library(enrichplot)
+library(pheatmap)
+library(tidyr)
+library(ggpubr)
+library(Cairo)
+library(ashr)
+library(enrichplot)
+library(BiocParallel)
+
+
+#Load file and metadata
+metadata <- read_tsv("metadata.tsv")
+
+tse <- tximeta(metadata, type="salmon") # use ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_47/gencode.v47.annotation.gtf.gz
+
+colData(tse)
+assayNames(tse)
+rowRanges(tse) # 384354 transcriptids
+
+gse <- summarizeToGene(tse)
+rowRanges(gse) # 78277 genids
+
+#Add sample names as rownames of metadata
+metadata <- as.data.frame(metadata)
+rownames(metadata) <- metadata$names
+
+# Ensure metadata rownames match column names in count data
+all(colnames(counts_caco) == rownames(metadata))
+  #TRUE
+
+#Convert countsdata to matrix. DESeq2 wants matrix.
+count_matrix <- as.matrix(counts_caco)
+
+all(colnames(count_matrix) == rownames(metadata))
+## TRUE
+
+  #Perform DESeq2 analysis
+
+# Create DESeqDataSet object
+
+dds <- DESeqDataSetFromMatrix(countData = count_matrix,
+                              colData = metadata,
+                              design = ~ genotype_treatment)
+
+# Check levels for Condition factor in DESeq design to know comparison: control vs treatment or opposite.
+levels(dds$genotype_treatment)
+# "WT_blank" "KO_blank" "WT_lod"   "KO_lod".  WT_blank is referance.
+
+#Remove genes with low counts
+dds <- dds[rowSums(counts(dds)) > 10, ]
+##18869 elements after.
+
+dds <- estimateSizeFactors(dds)
+
+
+  #Perform differential expression analysis.
+
+#Run DESeq analysis
+ddsres <- DESeq(dds)
+
+resultsNames(ddsres)
+#"Intercept"                               "genotype_treatment_KO_blank_vs_WT_blank"
+#"genotype_treatment_WT_lod_vs_WT_blank"   "genotype_treatment_KO_lod_vs_WT_blank" 
+
+#Retrive results for comparison
+ddsres_kowt_blank <- results(ddsres, contrast = c("genotype_treatment", "KO_blank", "WT_blank"))
+ddsres_kowt_lod <- results(ddsres, contrast = c("genotype_treatment", "KO_lod", "WT_lod"))
+ddsres_wt_lod_blank <- results(ddsres, contrast = c("genotype_treatment", "WT_lod", "WT_blank"))
+ddsres_ko_lod_blank <- results(ddsres, contrast = c("genotype_treatment", "KO_lod", "KO_blank"))
+
+#Explore with MA plot
+
+plotMA(ddsres_kowt_blank, ylim=c(-4, 4), main="DGE Caco KO vs WT")
+plotMA(ddsres_kowt_lod, ylim=c(-4, 4), main="DGE Caco KO vs WT with lodoxamide")
+plotMA(ddsres_wt_lod_blank, ylim=c(-3, 3), main="DGE Caco WT with and without lodoxamide ")
+plotMA(ddsres_ko_lod_blank, ylim=c(-3, 3), main="DGE Caco KO with and without lodoxamide")
+
+  #Apply Log2 fold-change shrinkage
+
+# Run lfcShrink
+
+ddsres_kowt_blank_ash <- lfcShrink(ddsres, contrast = c("genotype_treatment", "KO_blank", "WT_blank"), type = "ashr")
+ddsres_kowt_lod_ash <- lfcShrink(ddsres, contrast = c("genotype_treatment", "KO_lod", "WT_lod"), type = "ashr")
+ddsres_wt_lod_blank_ash <- lfcShrink(ddsres, contrast = c("genotype_treatment", "WT_lod", "WT_blank"), type = "ashr")
+ddsres_ko_lod_blank_ash <- lfcShrink(ddsres, contrast = c("genotype_treatment", "KO_lod", "KO_blank"), type = "ashr")
+
+
+#MAplot of all different visualizations of DGE analysis.
+
+
+plotMA(ddsres_kowt_blank, ylim=c(-4, 4), main="DGE Caco KO vs WT")
+plotMA(ddsres_kowt_blank_ash, ylim=c(-4, 4), main="DGE Caco KO vs WT with LFCshrink")
+
+plotMA(ddsres_kowt_lod, ylim=c(-4, 4), main="DGE Caco KO vs WT with lodoxamide")
+plotMA(ddsres_kowt_lod_ash, ylim=c(-4, 4), main="DGE Caco KO vs WT with lodoxamide with LFCshrink")
+
+plotMA(ddsres_wt_lod_blank, ylim=c(-3, 3), main="DGE Caco WT with and without lodoxamide")
+plotMA(ddsres_wt_lod_blank_ash, ylim=c(-3, 3), main="DGE Caco WT with and without lodoxamide with LFCshrink")
+
+plotMA(ddsres_ko_lod_blank, ylim=c(-3, 3), main="DGE Caco KO with and without lodoxamide")
+plotMA(ddsres_ko_lod_blank_ash, ylim=c(-3, 3), main="DGE Caco KO with and without lodoxamide with LFCshrink")
+
+  #Plot counts
+# Compare counts for top differential expressed gene based on padj in ko vs wt blank.
+
+plotCounts(ddsres, gene=rownames(ddsres_kowt_blank_ash)[which.min(ddsres_kowt_blank_ash$padj)], intgroup = "genotype_treatment")
+
+gene1 <- plotCounts(ddsres, gene=rownames(ddsres_kowt_blank_ash)[which.min(ddsres_kowt_blank_ash$padj)], intgroup =c("genotype_treatment", "treatment", "genotype"), returnData = TRUE)
+
+ggplot(gene1, aes(x=genotype_treatment, y=count, fill = genotype))+
+  geom_jitter(aes(color = genotype, shape = treatment), width = 0.1)+
+  #facet_wrap(~ treatment, scales = "fixed")+
+  scale_fill_manual(values = c("blue", "red"))+
+  labs(title = rownames(ddsres_kowt_blank_ash)[which.min(ddsres_kowt_blank_ash$padj)],
+       x = "Genotype and Treatment",
+       y = "Count")
+
+
+  #Add columns with additional information - gene symbol and biotype - to the DESeq results table.
+
+# Use Ensembl's Biomart database
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")  # Human dataset
+
+#View list of attributes
+listAttributes(ensembl)
+
+# Convert to dataframe
+kowt_blank_df <-  as.data.frame(ddsres_kowt_blank_ash)
+kowt_lod_df <- as.data.frame(ddsres_kowt_lod_ash)
+wt_lod_bland_df <- as.data.frame(ddsres_wt_lod_blank_ash)
+ko_lod_blank_df <-  as.data.frame(ddsres_ko_lod_blank_ash)
+
+
+# Put dataframes into a list
+ash_list <- list(
+  ddsres_kowt_blank_ash = ddsres_kowt_blank_ash,
+  ddsres_kowt_lod_ash = ddsres_kowt_lod_ash,
+  ddsres_wt_lod_blank_ash = ddsres_wt_lod_blank_ash,
+  ddsres_ko_lod_blank_ash = ddsres_ko_lod_blank_ash
+)
+#Convert to df and extract ensembl id version to own column (from rownames).
+df_list <- lapply(ash_list, function(res) {
+  df <- as.data.frame(res)
+  df$gene_id <- sub("\\..*", "", rownames(df)) # remove version suffix
+  df
+})
+
+# Make functio to check duplicates based in gene_id column
+check_duplicates <- function(df_list) {
+  lapply(df_list, function(df) {
+    #gene_id
+    gene_ids <- sub("\\..*", "", rownames(df))
+    # Count how many base IDs are duplicated
+    sum(duplicated(gene_ids))
+  })
+}
+
+# Check duplicates before filtering
+dup_before <- check_duplicates(df_list)
+
+# Remove duplicates (if any) based on  max abs log2FC.
+df_filtered <- lapply(df_list, function(df) {
+  df %>%
+    mutate(gene_id = sub("\\..*", "", rownames(df))) %>%
+    group_by(gene_id) %>%
+    slice_max(order_by = abs(log2FoldChange), n = 1, with_ties = FALSE) %>%
+    ungroup()
+})
+
+# Check duplicates after filtering
+dup_after <- check_duplicates(df_filtered)
+## No duplicates.
+
+
+# Extract ensemble gene id versions from each df.
+all_ids <- unique(unlist(lapply(df_list, \(df) df$gene_id)))
+
+# Retrieve information for each gene (e.g., Ensembl gene ID, symbol, and gene biotype)
+gene_info <- getBM(
+  attributes = c("ensembl_gene_id", "external_gene_name", "gene_biotype"),
+  filters = "ensembl_gene_id", 
+  values = all_ids,  # Ensembl gene IDs from DESeq2 results
+  mart = ensembl)
+
+  # Merge gene_info with dataframes.
+
+annotated_list <- lapply(df_filtered, function(df) {
+  df <- left_join(df, gene_info, by = c("gene_id" = "ensembl_gene_id"))
+  return(df)
+})
+
+#Rename
+names(annotated_list) <- gsub("_ash$", "_df", names(annotated_list)) #$ specifies end of string.
+
+#Save to environment
+list2env(annotated_list, .GlobalEnv)
+
+
+  # PCA plot
+
+
+# Perform PCA using top 1000 variable genes and get the data for ggplot2
+vsd <- vst(dds, blind = TRUE)
+
+pcadata <- plotPCA(vsd, intgroup = c("genotype", "treatment"), ntop = 1000, returnData = TRUE)
+percentVar <- round(100 * attr(pcadata, "percentVar"))
+
+group_color <- c("WT" = "#F8766D",
+                 "KO" = "#619CFF")
+colData(dds)$genotype <- factor(colData(dds)$genotype, levels = c("WT", "KO"))
+
+# Plot
+ggplot(pcadata, aes(PC1, PC2, color = genotype, shape = treatment, label = genotype_clone)) + # aes specifies aesthetics
+  geom_point(size = 3) + # Add points
+  geom_text(vjust = -0.5, hjust = 0.5, size = 3) + # Add sample labels
+  labs(title = "PCA Plot Caco GPR35 KO vs WT with treatment and clone info",
+       x = paste0("PC1: ",percentVar[1],"% variance"), # attr -> set attributes of object.
+       y = paste0("PC2: ",percentVar[2],"% variance"))+
+  scale_color_manual(values = group_color) +
+  theme_minimal()+
+  theme(legend.position = "top") +
+  guides(color = guide_legend(override.aes = list(label = ""))) # Remove labels in the legend
+
+ggplot(pcadata, aes(PC1, PC2, color = genotype, shape = treatment, label = genotype_clone)) + # aes specifies aesthetics
+  geom_point(size = 3) + # Add points
+  geom_text(vjust = -0.5, hjust = 0.5, size = 3) + # Add sample labels
+  stat_ellipse(aes(group = genotype), type = "t", level = 0.95, linetype = "dashed", linewidth = 0.8) +
+  labs(title = "PCA Plot Caco GPR35 KO vs WT with treatment and clone info",
+       x = paste0("PC1: ",percentVar[1],"% variance"), # attr -> set attributes of object.
+       y = paste0("PC2: ",percentVar[2],"% variance"))+
+  scale_color_manual(values = group_color) +
+  theme_minimal()+
+  theme(legend.position = "top") +
+  guides(color = guide_legend(override.aes = list(label = "")))
+
+# Subset pcadata to only plot nontreaed (blank)
+pcadata_blank <- pcadata %>% filter (treatment == "blank")
+
+# Plot pcadata_blank
+ggplot(pcadata_blank, aes(PC1, PC2, color = genotype, label = genotype_clone)) + # aes specifies aesthetics
+  geom_point(size = 3) + # Add points
+  geom_text(vjust = -0.5, hjust = 0.5, size = 3) + # Add sample labels
+  labs(title = "PCA Plot Caco GPR35 KO vs WT without treatment",
+       x = paste0("PC1: ",percentVar[1],"% variance"), # attr -> set attributes of object.
+       y = paste0("PC2: ",percentVar[2],"% variance"))+
+  scale_color_manual(values = group_color) +
+  theme_minimal()+
+  theme(legend.position = "top") +
+  guides(color = guide_legend(override.aes = list(label = ""))) # Remove labels in the legend
+
+ggplot(pcadata_blank, aes(PC1, PC2, color = genotype, label = genotype_clone)) + # aes specifies aesthetics
+  geom_point(size = 3) + # Add points
+  geom_text(vjust = -0.5, hjust = 0.5, size = 3) + # Add sample labels
+  stat_ellipse(aes(group = genotype), type = "t", level = 0.95, linetype = "dashed", linewidth = 0.8) +
+  labs(title = "PCA Plot Caco GPR35 KO vs WT without treatment",
+       x = paste0("PC1: ",percentVar[1],"% variance"), # attr -> set attributes of object.
+       y = paste0("PC2: ",percentVar[2],"% variance"))+
+  scale_color_manual(values = group_color) +
+  theme_minimal()+
+  theme(legend.position = "top") +
+  guides(color = guide_legend(override.aes = list(label = "")))
+
+  #Vulcanoplot
+
+#Function to generate vulcanoplot, with and without top20 genes by Padjusted.
+generate_volcano <- function(df, name) {
+  #general volcanoplot -> no highligheted genes
+  plot1 <- EnhancedVolcano(df,
+                           lab = NA,
+                           x = "log2FoldChange",
+                           y = "pvalue",
+                           title = paste("Volcano plot:", name),
+                           pCutoff = 0.05,
+                           FCcutoff = 0.5,
+                           pointSize = 2.5,
+                           labSize = 3.0)
+  #Label top 10 genes based on Padjusted
+  top20 <- df[order(df$padj), ][1:20, ]
+  
+  plot2 <- EnhancedVolcano(df,
+                           lab = df$external_gene_name,
+                           x = "log2FoldChange",
+                           y = "pvalue",
+                           title = paste("Volcano Plot of Top 20 Genes by adjusted P:", name),
+                           pCutoff = 0.05,
+                           FCcutoff = 1.0,
+                           pointSize = 2.5,
+                           labSize = 4.0,
+                           selectLab = top20$external_gene_name)  # Highlight the top 10 genes
+  
+  return(list(plot1 = plot1, plot2 = plot2))
+}
+
+# Generate plots for each dataset
+volcano_plots <- lapply(names(annotated_list), function(name) {
+  df <- annotated_list[[name]]
+  generate_volcano(df, name)
+})
+
+# To access the first dataset plots:
+## volcano_plots[[1]]$plot1  # General volcano plot
+## volcano_plots[[1]]$plot2  # Volcano plot with top 10 genes highlighted
+
+# Proceed with ko vs wt plots, both with and without lodoxamide treatment: Lodoxamide does not appear to have and effect on the transcriptome.
+## Want to include top 20 genes and remove non protein coding genes as some of them have extreme log2fc.
+
+kowt_blank_protein <- ddsres_kowt_blank_df %>% filter(gene_biotype == "protein_coding")
+kowt_lod_protein <- ddsres_kowt_lod_df %>% filter(gene_biotype == "protein_coding")
+
+top20_blank <- kowt_blank_protein[order(kowt_blank_protein$padj), ][1:20, ]
+top20_lod <- kowt_lod_protein[order(kowt_lod_protein$padj), ][1:20, ]
+
+EnhancedVolcano(
+  kowt_blank_protein,
+  lab = kowt_blank_protein$external_gene_name,
+  x = "log2FoldChange",
+  y = "pvalue",
+  title = "Caco GPR35 KO vs WT without lodoxamide treatment",
+  pCutoff = 0.01,
+  FCcutoff = 1,
+  pointSize = 2.5,
+  labSize = 4.0,
+  selectLab = top20_blank$external_gene_name,
+  max.overlaps = Inf,           # Allow all labels
+  drawConnectors = TRUE,        # Optionally draw lines from point to label
+  #widthConnectors = 0.5
+  )
+
+EnhancedVolcano(
+  kowt_lod_protein,
+  lab = kowt_lod_protein$external_gene_name,
+  x = "log2FoldChange",
+  y = "pvalue",
+  title = "Caco GPR35 KO vs WT wit lodoxamide treatment",
+  pCutoff = 0.01,
+  FCcutoff = 1,
+  pointSize = 2.5,
+  labSize = 4.0,
+  selectLab = top20_lod$external_gene_name,
+  max.overlaps = Inf,           # Allow all labels
+  drawConnectors = TRUE,        # Optionally draw lines from point to label
+  #widthConnectors = 0.5
+  )
+
+
+# Make vulcanoplot showcasing GPR35
+
+GPR35_lab <- "GPR35"
+
+EnhancedVolcano(
+  kowt_blank_protein,
+  lab = kowt_blank_protein$external_gene_name,
+  x = "log2FoldChange",
+  y = "pvalue",
+  title = "Caco GPR35 KO vs WT without lodoxamide treatment",
+  pCutoff = 0.01,
+  FCcutoff = 1,
+  pointSize = 2.5,
+  labSize = 4.0,
+  selectLab = GPR35_lab,
+  max.overlaps = Inf,           # Allow all labels
+  drawConnectors = TRUE,        # Optionally draw lines from point to label
+  #widthConnectors = 0.5
+  )
+
+EnhancedVolcano(
+  kowt_lod_protein,
+  lab = kowt_lod_protein$external_gene_name,
+  x = "log2FoldChange",
+  y = "pvalue",
+  title = "Caco GPR35 KO vs WT wit lodoxamide treatment",
+  pCutoff = 0.01,
+  FCcutoff = 1,
+  pointSize = 2.5,
+  labSize = 4.0,
+  selectLab = GPR35_lab,
+  max.overlaps = Inf,           # Allow all labels
+  drawConnectors = TRUE,        # Optionally draw lines from point to label
+  #widthConnectors = 0.5
+  )
+
+  # Visualize differential gene expression using clusterProfiler
+
+# Make list to use with clusterprofiler
+clustpro_list <- list(
+  ddsres_kowt_blank_df = ddsres_kowt_blank_df,
+  ddsres_kowt_lod_df = ddsres_kowt_lod_df
+)
+
+#Remove NA and "" from external_gene_name columns
+clean_gene_name <- function(clustpro_list) {
+  lapply(clustpro_list, function(df) {
+    df[df$external_gene_name !="" & !is.na(df$external_gene_name), ]
+  })
+}
+
+clustpro_list <- clean_gene_name(clustpro_list)
+
+# Check duplicates in external_gene_name column
+check_dup_genename <- function(clustpro_list) {
+  lapply(clustpro_list, function(df) {
+    #gene_id
+    gene_name <- df$external_gene_name
+    # Count how many base IDs are duplicated
+    sum(duplicated(gene_name))
+  })
+}
+
+# Check duplicates before filtering
+dup_before <- check_dup_genename(clustpro_list)
+dup_before
+# 49 duplicated gene names in both dataframes in clustpro_list.
+
+
+# Generate ranked vectors
+
+gen_ranked_vector <- function(df) {
+  # Remove NA and empty strings from external_gene_name
+  df <- df[!is.na(df$external_gene_name) & df$external_gene_name != "", ]
+  # Remove duplicated gene names, keeping the one with the highest absolute log2FC
+  df <- df[order(abs(df$log2FoldChange), decreasing = TRUE), ]
+  df <- df[!duplicated(df$external_gene_name), ]
+  
+  # Ensure numeric conversion of log2FC and pvalue
+  log2fc <- as.numeric(df$log2FoldChange)
+  pval <- as.numeric(df$pvalue)
+  
+  # Calculate ranking based on sign(log2FoldChange) * (-log10(pvalue))
+  ranking <- sign(log2fc) * (-log10(pval))
+  
+  # Create a named vector with gene symbols as names
+  ranked_vector <- setNames(ranking, df$external_gene_name)
+  
+  return(ranked_vector)
+}
+
+# Apply this function to each dataframe in the list
+ranked_vectors <- lapply(clustpro_list, gen_ranked_vector)
+
+# Rename
+names(ranked_vectors) <- gsub("^ddsres_", "vector_", names(ranked_vectors)) #^ specifies start of the string.
+
+# Save to environment
+#list2env(ranked_vectors, .GlobalEnv)
+
+# Check min and max values in ranked_vectors
+
+check_min_max <- function(vector_list) {
+  lapply(vector_list, function(vec) {
+    return(c(min=min(vec, na.rm = TRUE), max=max(vec, na.rm = TRUE)))
+  })
+}
+
+check_min_max(ranked_vectors)
+
+#$vector_kowt_blank_df
+#      min       max 
+#-47.29435  42.14078 
+
+#$vector_kowt_lod_df
+#      min       max 
+#-30.02503  32.42396
+
+###All numeric.
+
+# Generate ranking plots
+
+plot_rankings <- function(vec, name) {
+  plot(
+    sort(vec, decreasing = TRUE),
+    main = paste("Ranking plot", name),
+    xlab = "Genes",
+    ylab = "Ranking score"
+  )
+}
+
+for (name in names(ranked_vectors)) {
+  vec <- ranked_vectors[[name]]
+  plot_rankings(vec, name)
+}
+
+
+  # Perform GSEA
+
+# Load .gmt files into a named list
+gmt_files <- list(
+  GOBP = read.gmt("../GSEA_genesets/c5.go.bp.v2024.1.Hs.symbols.gmt"),
+  KEGG = read.gmt("../GSEA_genesets/c2.cp.kegg_legacy.v2024.1.Hs.symbols.gmt"),
+  Hallmark = read.gmt("../GSEA_genesets/h.all.v2024.1.Hs.symbols.gmt"),
+  Reactome = read.gmt("../GSEA_genesets/c2.cp.reactome.v2024.1.Hs.symbols.gmt")
+)
+
+# Function to run GSEA
+run_gsea_all <- function(ranked_list, gmt_list) {
+  results <- list()
+  
+  for (vec_name in names(ranked_list)) {
+    ranked_vec <- sort(ranked_list[[vec_name]], decreasing = TRUE)
+    
+    for (gmt_name in names(gmt_list)) {
+      geneset <- gmt_list[[gmt_name]]
+      
+      # Run GSEA
+      gsea_result <- tryCatch({
+        GSEA(
+          gene = ranked_vec,
+          TERM2GENE = geneset,
+          pAdjustMethod = "BH", # Adjust for multiple testing
+  pvalueCutoff = 0.05, # P-value cutoff for enrichment
+  minGSSize = 5,
+  maxGSSize = 1000,
+  eps = 0, #boundary for calculating pval
+  exponent = 1, #weight of each step
+  seed = TRUE
+        )
+      }, error = function(e) {
+        message(sprintf("Failed GSEA for %s - %s: %s", vec_name, gmt_name, e$message))
+        return(NULL)
+      })
+      
+      results[[paste0(vec_name, "_", gmt_name)]] <- gsea_result
+    }
+  }
+  
+  return(results)
+}
+
+#library(BiocParallel)
+
+register(SerialParam()) #Ensures all computations are performed serially instead of in parallel -> windows can have problems with parallel computations.
+
+# Run GSEA
+gsea_results <- run_gsea_all(ranked_vectors, gmt_files)
+
+  # Filter gsea results to reduce similar pathways/redundancy.
+
+# Function to reduce redundancy in GSEA results
+filter_gsea_results <- function(gsea_list, max_terms = 15, method = "complete") {
+  reduced_list <- list()
+  
+  for (name in names(gsea_list)) {
+    gsea <- gsea_list[[name]]
+    
+    # Skip if GSEA failed
+    if (is.null(gsea) || nrow(gsea@result) == 0) {
+      message(sprintf("Skipping %s: no results", name))
+      reduced_list[[name]] <- NULL
+      next
+    }
+
+    # Compute term similarity matrix
+    gsea <- pairwise_termsim(gsea)
+    ## Stored in gsea@termsim
+    
+    # Use hierarchical clustering to group similar pathways
+    sim_matrix <- gsea@termsim
+    
+    # Hierarchical clustering on similarity
+    ## Distance matrix = 1 - sim_matrix
+    hc <- hclust(as.dist(1 - sim_matrix), method = method)
+    
+    # Cut into k clusters, where k is the smaller of the number of terms or max_terms
+    k <- min(max_terms, nrow(sim_matrix))
+    clusters <- cutree(hc, k = k)
+    
+    # Select one representative per cluster (e.g. lowest adjusted p-value)
+    gsea_df <- gsea@result # pull results from gsea object
+    gsea_df$Cluster <- clusters[match(gsea_df$ID, names(clusters))] # add column with clusters
+    
+    # For each cluster, keep the best term
+    representative_terms <- gsea_df %>%
+      group_by(Cluster) %>%
+      slice_min(p.adjust, n = 1) %>%
+      ungroup() %>%
+      arrange(p.adjust)
+    
+    # Subset the original GSEA object to keep only the selected terms
+    reduced_list[[name]] <- gsea[representative_terms$ID]
+  }
+  
+  return(reduced_list)
+}
+
+filtered_gsea_results <- filter_gsea_results(gsea_results, max_terms = 15)
+
+
+  # Visualize clustering used to reduce similarity
+
+# Function to plot the dendrogram of enriched terms, colored by clusters
+plot_term_clustering <- function(gsea, title = NULL, method = "complete", max_terms = 15) {
+  
+  # Compute pairwise term similarities using tryCatch to handle errors
+  gsea <- tryCatch(pairwise_termsim(gsea), error = function(e) {
+    message("pairwise_termsim failed: ", e$message)
+    return(NULL)
+  })
+  
+  # Skip if pairwise_termsim failed or result is not a valid gseaResult
+  if (is.null(gsea) || !inherits(gsea, "gseaResult")) {
+    cat("Skipping plot for", title, "- not a valid gseaResult after pairwise_termsim\n")
+    return()
+  }
+
+  # Extract similarity matrix
+  sim_matrix <- gsea@termsim
+  
+  # Perform hierarchical clustering based on similarity matrix
+  hc <- tryCatch(hclust(as.dist(1 - sim_matrix), method = method), error = function(e) {
+    message("Hierarchical clustering failed for ", title, ": ", e$message)
+    return(NULL)
+  })
+  
+  # Skip if hierarchical clustering fails
+  if (is.null(hc)) {
+    cat("Skipping plot for", title, "- clustering failed\n")
+    return()
+  }
+  
+  # Determine number of terms
+  num_terms <- length(hc$labels)
+  if (num_terms < 2) {
+    cat("Skipping plot for", title, "- fewer than 2 terms\n")
+    return()  # Skip plot if fewer than 2 terms
+  }
+  
+  # Set k to be within the range [2, term_count - 1], and not more than max_terms
+  k <- min(max_terms, num_terms - 1)
+  
+  # Skip plotting if there are not enough clusters or terms to create valid clusters
+  if (k < 2) {
+    cat("Skipping plot for", title, "- not enough clusters to plot\n")
+    return()
+  }
+  
+  # Plot the dendrogram and highlight clusters
+  plot(hc, main = title, xlab = "", sub = "")
+  rect.hclust(hc, k = k, border = 2:(k + 1))  # Highlight clusters with different borders
+}
+
+# Generate and the plots for each valid GSEA result
+for (name in names(gsea_results)) {
+  gsea <- gsea_results[[name]]
+  
+# Skip if not a gseaResult object
+  if (!inherits(gsea, "gseaResult")) {
+    cat("Skipping:", name, "(not a gseaResult)\n")
+    next
+  }
+
+  cat("Plotting:", name, "\n") # feedback wich plot is being made
+  plot_term_clustering(gsea, title = name, max_terms = 15)
+}
+
+
+  # Dotplot of GSEA results
+
+# Check the class of each item in filtered_gsea_results
+classes <- sapply(filtered_gsea_results, class)
+# Print the classes to the console
+print(classes)
+
+# Function to generate dot plots for all GSEA result dataframes
+generate_dotplots_from_dataframes <- function(filtered_gsea_results) {
+  
+  for (name in names(filtered_gsea_results)) {
+    res <- filtered_gsea_results[[name]]
+    
+    # Check if the object is a dataframe and has required columns
+    if (!is.data.frame(res) || !all(c("NES", "Description", "core_enrichment", "p.adjust", "setSize") %in% colnames(res))) {
+      cat("Skipping:", name, "(not a valid dataframe or missing required columns)\n")
+      next
+    }
+    
+    # Remove "vector_" prefix from name
+    plot_title <- sub("^vector_", "", name)
+    
+    cat("Generating dot plot for:", plot_title, "\n")
+
+    # Calculate the Generatio
+    res$Generatio <- sapply(strsplit(res$core_enrichment, "/"), length) / res$setSize
+    
+    # Generate the dot plot
+    p <- ggplot(res, aes(x = NES, y = reorder(Description, NES))) +
+      geom_point(aes(size = Generatio, color = p.adjust), alpha = 0.6) +  # Dot size reflects gene ratio, color by p.adjust
+      scale_size_continuous(range = c(2, 8),  # Size of the dots
+                            labels = function(x) format(x, digits = 3)) +  # Ensure 3 significant digits
+      scale_color_gradientn(colors = c("red", "blue"),  # Color gradient by p.adjust
+                            labels = function(x) format(x, digits = 3)) +
+      scale_x_continuous(expand = expansion(mult = c(0.1, 0.1))) +
+      labs(x = "Normalized Enrichment Score (NES)", y = "Pathway",
+           title = plot_title) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.title = element_text(hjust = 0.5))  # Rotate x-axis labels
+    
+  }
+}
+
+# Call the function with your filtered GSEA results
+generate_dotplots_from_dataframes(filtered_gsea_results)
+
+
