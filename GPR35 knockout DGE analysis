@@ -5,6 +5,8 @@ set.seed(123456)
 #Load packages
 library(DESeq2)
 library(tidyverse)
+library(tximeta)
+library(SummarizedExperiment)
 library(RColorBrewer)
 library(biomaRt)
 library(magrittr)
@@ -36,35 +38,20 @@ rowRanges(tse) # 384354 transcriptids
 gse <- summarizeToGene(tse)
 rowRanges(gse) # 78277 genids
 
-#Add sample names as rownames of metadata
-metadata <- as.data.frame(metadata)
-rownames(metadata) <- metadata$names
-
-# Ensure metadata rownames match column names in count data
-all(colnames(counts_caco) == rownames(metadata))
-  #TRUE
-
-#Convert countsdata to matrix. DESeq2 wants matrix.
-count_matrix <- as.matrix(counts_caco)
-
-all(colnames(count_matrix) == rownames(metadata))
-## TRUE
-
   #Perform DESeq2 analysis
 
 # Create DESeqDataSet object
 
-dds <- DESeqDataSetFromMatrix(countData = count_matrix,
-                              colData = metadata,
-                              design = ~ genotype_treatment)
+dds <- DESeqDataSet(gse, design = ~ genotype_treatment)
 
 # Check levels for Condition factor in DESeq design to know comparison: control vs treatment or opposite.
 levels(dds$genotype_treatment)
 # "WT_blank" "KO_blank" "WT_lod"   "KO_lod".  WT_blank is referance.
 
-#Remove genes with low counts
-dds <- dds[rowSums(counts(dds)) > 10, ]
-##18869 elements after.
+#Remove genes with low counts and found in atleast 6 samples
+keep <- rowSums(counts(dds) >= 10) >= 6
+dds <- dds[keep, ]
+##18869 genes after.
 
 dds <- estimateSizeFactors(dds)
 
