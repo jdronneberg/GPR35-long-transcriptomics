@@ -5,6 +5,8 @@ set.seed(123456)
 
 library(DESeq2)
 library(tidyverse)
+library(tximeta)
+library(SummarizedExperiment)
 library(RColorBrewer)
 library(biomaRt)
 library(magrittr)
@@ -30,7 +32,8 @@ metadata <- data.frame(Sample = c("AGFP", "AGFP-Kyna", "BGFP", "BGFP-Kyna", "HEK
 Treatment = c("Control", "Kyna", "Control", "Kyna", "Control", "Kyna"))
 rownames(metadata) <- metadata$Sample
 
-metadata <- read_tsv("metadata.tsv")
+# Load metadata
+#metadata <- read_tsv("metadata.tsv")
 
 se <- tximeta(metadata, type="salmon") # use ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_45/gencode.v45.annotation.gtf.gz
 
@@ -44,13 +47,12 @@ rowRanges(gse) # 62749 geneids
 
 
 # Create DESeqDataSet object
-dds <- DESeqDataSetFromMatrix(countData = count_matrix,
-                              colData = metadata,
-                              design = ~ Condition)
+dds <- DESeqDataSet(gse, design = ~ Condition)
 
-#Remove genes with low counts
-dds <- dds[rowSums(counts(dds)) > 10, ]
-##20794 elements after.
+#Remove genes with low counts and expressed in less than 2 samples
+keep <- rowSums(counts(dds) >= 10) >= 2
+dds <- dds[keep, ]
+##20794 genes after.
 
 #estimateSizeFactor
 dds <- estimateSizeFactors(dds)
