@@ -48,7 +48,7 @@ dds <- DESeqDataSet(gse, design = ~ genotype_treatment)
 levels(dds$genotype_treatment)
 # "WT_blank" "KO_blank" "WT_lod"   "KO_lod".  WT_blank is referance.
 
-#Remove genes with low counts and found in atleast 6 samples
+#Remove genes with low counts and found in less than 6 samples
 keep <- rowSums(counts(dds) >= 10) >= 6
 dds <- dds[keep, ]
 ##18869 genes after.
